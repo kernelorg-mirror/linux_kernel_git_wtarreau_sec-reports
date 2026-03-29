@@ -130,6 +130,7 @@ void process_mbox(FILE *in)
 					if (line[0] == '-' && line[1] == '-' && stack_ptr >= 0) {
 						int i, lvl = -1;
 						int is_text_plain = 0;
+						int is_base64 = 0;
 
 						/* check if this looks like a known boundary */
 						for (lvl = stack_ptr; lvl >= 0; lvl--) {
@@ -150,6 +151,7 @@ void process_mbox(FILE *in)
 
 						part_hdr_len = 0;
 						part_hdrs[0] = 0;
+						is_base64 = 0;
 
 						/* now time to inspect part-headers */
 						while (*read_hdr(in, line, next, sizeof(line))) {
@@ -185,6 +187,12 @@ void process_mbox(FILE *in)
 								continue;
 							}
 
+							if (strncasecmp(line, "Content-Transfer-Encoding: base64", 33) == 0) {
+								is_base64 = 1;
+								continue;
+							}
+
+							/* the rest is always appended */
 							ret = snprintf(part_hdrs + part_hdr_len, sizeof(part_hdrs) - part_hdr_len, "%s", line);
 							if (ret >= 0 && ret < sizeof(part_hdrs) - part_hdr_len)
 								part_hdr_len += ret;
@@ -201,6 +209,11 @@ void process_mbox(FILE *in)
 							 * headers so that we have the content-type and even the
 							 * content-transfer-encoding.
 							 */
+							unsigned base64_word = 0;
+							int base64_ofs = 0;
+							int bits = 0;
+							char *c;
+
 							printf("%s", part_hdrs);
 							while (*read_hdr(in, line, next, sizeof(line))) {
 								if (line[0] == '-' && line[1] == '-') {
@@ -210,7 +223,52 @@ void process_mbox(FILE *in)
 									if (i <= stack_ptr)
 										break;
 								}
-								printf("%s", line);
+								if (!is_base64)
+									printf("%s", line);
+								else {
+									/* decode and dump accumulated base64 bytes */
+									for (c = line; *c; c++) {
+										if (*c >= 'A' && *c <= 'Z') {
+											base64_word = (base64_word << 6) + (*c - 'A');
+											base64_ofs++;
+											bits += 6;
+										}
+										else if (*c >= 'a' && *c <= 'z') {
+											base64_word = (base64_word << 6) + (*c - 'a') + 26;
+											base64_ofs++;
+											bits += 6;
+										}
+										else if (*c >= '0' && *c <= '9') {
+											base64_word = (base64_word << 6) + (*c - '0') + 52;
+											base64_ofs++;
+											bits += 6;
+										}
+										else if (*c == '+') {
+											base64_word = (base64_word << 6) + 62;
+											base64_ofs++;
+											bits += 6;
+										}
+										else if (*c == '/') {
+											base64_word = (base64_word << 6) + 63;
+											base64_ofs++;
+										}
+										else if (*c == '=') {
+											base64_word = (base64_word << 6);
+											base64_ofs++;
+										}
+
+										if (base64_ofs == 4) {
+											if (bits >= 8)
+												putchar((unsigned char)(base64_word >> 16));
+											if (bits >= 16)
+												putchar((unsigned char)(base64_word >> 8));
+											if (bits >= 24)
+												putchar((unsigned char)base64_word);
+											base64_ofs = 0;
+											bits = 0;
+										}
+									}
+								}
 							}
 							found_and_dumped = 1;
 						}
