@@ -34,6 +34,16 @@ int is_spht(int ch)
 	return ch == ' ' || ch == '\t';
 }
 
+/* returns true if <hdr> starts with <start>, ignoring case */
+int hdr_starts_with(const char *hdr, const char *start)
+{
+	do {
+		if (!*start)
+			return 1;
+	} while (tolower(*hdr++) == tolower(*start++));
+	return 0;
+}
+
 /* reads a possibly multi-line header from <in> and returns it, or NULL if end
  * reached. It requires 2 buffers, one for the currently assembled line, and
  * one for the next one, both of size <size>. The caller is responsible for
@@ -83,13 +93,13 @@ void process_mbox(FILE *in)
 			 * part of the line here.
 			 */
 			while (*read_hdr(in, line, next, sizeof(line)) && !is_crlf(line[0])) {
-				if (strncasecmp(line, "Content-Length:", 15) == 0)
+				if (hdr_starts_with(line, "Content-Length:"))
 					continue;
 
-				if (strncasecmp(line, "Lines:", 6) == 0)
+				if (hdr_starts_with(line, "Lines:"))
 					continue;
 
-				if (strncasecmp(line, "Content-Type: multipart", 23) == 0) {
+				if (hdr_starts_with(line, "Content-Type: multipart")) {
 					/* the boundary is on this line */
 					is_multipart = 1;
 					boundary = strstr(line, "boundary=");
@@ -157,7 +167,7 @@ void process_mbox(FILE *in)
 						while (*read_hdr(in, line, next, sizeof(line))) {
 							int ret;
 
-							if (strncasecmp(line, "Content-Type: multipart", 23) == 0 && stack_ptr < MAX_STACK - 1) {
+							if (hdr_starts_with(line, "Content-Type: multipart") && stack_ptr < MAX_STACK - 1) {
 								/* this is a nested multipart, the parent is likely multipart/alternative */
 								boundary = strstr(line, "boundary=");
 								if (boundary) {
@@ -187,7 +197,7 @@ void process_mbox(FILE *in)
 								continue;
 							}
 
-							if (strncasecmp(line, "Content-Transfer-Encoding: base64", 33) == 0) {
+							if (hdr_starts_with(line, "Content-Transfer-Encoding: base64")) {
 								is_base64 = 1;
 								continue;
 							}
@@ -200,7 +210,7 @@ void process_mbox(FILE *in)
 							if (is_crlf(line[0]))
 								break;
 
-							if (strncasecmp(line, "Content-Type: text/plain", 24) == 0)
+							if (hdr_starts_with(line, "Content-Type: text/plain"))
 								is_text_plain = 1;
 						}
 
