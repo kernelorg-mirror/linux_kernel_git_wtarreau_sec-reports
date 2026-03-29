@@ -4,6 +4,8 @@
 #define MAX_LINE 4096
 #define MAX_STACK 10
 
+int do_clean_hdr = 0;
+
 /* extract the boundary from <in> which must start at "boundary=" into <store>
  * of size <size>. It takes care of quoted strings.
  */
@@ -109,6 +111,21 @@ void process_mbox(FILE *in)
 						//printf("### boundaries[%d]=%s\n", stack_ptr, boundaries[stack_ptr]);
 					}
 					continue;
+				}
+
+				if (do_clean_hdr) {
+					if (hdr_starts_with(line, "Received"))
+						continue;
+					if (hdr_starts_with(line, "X-"))
+						continue;
+					if (hdr_starts_with(line, "Authentication-"))
+						continue;
+					if (hdr_starts_with(line, "ARC-"))
+						continue;
+					if (hdr_starts_with(line, "DKIM-"))
+						continue;
+					if (hdr_starts_with(line, "DMARC-"))
+						continue;
 				}
 				printf("%s", line);
 			}
@@ -299,6 +316,13 @@ void process_mbox(FILE *in)
 
 int main(int argc, char *argv[])
 {
+	if (argc > 1 && strcmp(argv[1], "-c") == 0) {
+		/* clean useless headers */
+		do_clean_hdr = 1;
+		argv++;
+		argc--;
+	}
+
 	if (argc < 2)
 		process_mbox(stdin);
 	else {
