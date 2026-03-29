@@ -1,0 +1,21 @@
+#!/bin/bash
+
+PROG="${BASH_SOURCE[0]}"
+PROGS="${PROG%/*}"
+
+export KDIR=/path/to/kernel/source
+export PATH=$HOME/.local/bin:$PATH
+
+die() {
+        echo "Fatal: $*"
+        exit 1
+}
+
+cd "$PROGS" || die "couldn't locate script"
+
+TMP="$(/usr/bin/mktemp -d -p /tmp)"
+[ -n "$TMP" -a -d "$TMP/." ] || die "mktemp error"
+
+./textonly > "$TMP/msg.mbox"
+./process-mbox.sh "$TMP/msg.mbox" #2>"$TMP/msg.mbox.log"
+cat "$TMP/msg.mbox.edited"

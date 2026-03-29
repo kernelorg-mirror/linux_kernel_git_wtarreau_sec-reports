@@ -1,0 +1,16 @@
+:0
+* ^List-Id:.*security.linux.kernel.org
+* !^In-Reply-To:
+{
+    # 1. Create a clone of the message for the following block.
+    :0 c
+    {
+        # 2. apply the filter to this copy.
+        :0 fw
+        | scripts/sec-process.sh
+
+        # 3. Deliver the resulting summarized text to the mbox.
+        :0:
+        mbox
+    }
+}
