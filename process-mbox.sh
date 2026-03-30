@@ -3,33 +3,33 @@
 MSG="$1"
 export LC_ALL=C
 KDIR="${KDIR:-/usr/src/linux}"
-#CID=$(dd if=/dev/urandom bs=16 count=1 status=none | od -tx1 -An | tr -dc '[0-9a-f]')
+AGENT="${AGENT:-local}"
 DB_PATH=$(llm logs path)
 
-llm -m local -s "Analyze this email received on the linux kernel security list (attachments were dropped before passing it to you). Once done, you will emit a extra header 'x-file:' followed by the file names affected by the bug report, or, if it was not possible to figure affected file names, 'x-func:' with the affected function(s). Then I will process your responses and will come back with new instructions." < "$MSG" > "$MSG".loc
+llm -m "$AGENT" -s "Analyze this email received on the linux kernel security list (attachments were dropped before passing it to you). Once done, you will emit a extra header 'x-file:' followed by the file names affected by the bug report, or, if it was not possible to figure affected file names, 'x-func:' with the affected function(s). Then I will process your responses and will come back with new instructions." < "$MSG" > "$MSG".loc
 
 CID=$(sqlite3 "$DB_PATH" "SELECT id FROM conversations ORDER BY rowid DESC LIMIT 1;")
 
-llm -m local --cid "$CID" -c "Emit a line starting with 'x-subsys:' followed by the name of thesubsystem affected by this report." > "$MSG".subsys
+llm -m "$AGENT" --cid "$CID" -c "Emit a line starting with 'x-subsys:' followed by the name of thesubsystem affected by this report." > "$MSG".subsys
 
-llm -m local --cid "$CID" -c "Emit a line starting with 'x-summary:' followed by a quick summary of the claims of the report for maintainers. The goal is to have just one line of a few sentences to help maintainers figure if it's for them or for someone else." > "$MSG".summary
-
-#if ! grep -q '^x-file:' "$MSG".loc; then
-#  echo "no location"
-#  exit 1
-#fi
+llm -m "$AGENT" --cid "$CID" -c "Emit a line starting with 'x-summary:' followed by a quick summary of the claims of the report for maintainers. The goal is to have just one line of a few sentences to help maintainers figure if it's for them or for someone else." > "$MSG".summary
 
 maint=( )
+maint_all=""
 if grep -q '^x-file:' "$MSG".loc; then
     files=( $(grep '^x-file:' "$MSG".loc | cut -f2- -d: | tr ',' ' ') )
     for f in "${files[@]}"; do
         f="${f##[.ab]/}"
-        maint[${#maint[@]}]=$(cd "$KDIR"; ./scripts/get_maintainer.pl "$f")
+        o="$MSG.maint.${#maint[@]}"
+        m=$(cd "$KDIR"; ./scripts/get_maintainer.pl "$f" 2>/dev/null)
+        (echo "# file: $f"; echo "$m") > "$o"
+        maint[${#maint[@]}]="$m"
+        maint_all="${maint_all}${m}"
     done
 fi
 
-if [ ${#maint[@]} -gt 0 ]; then
-	llm -m local --cid "$CID" -c >"$MSG".maint <<EOF
+if [ "${#maint_all}" -gt 0 ]; then
+	llm -m "$AGENT" --cid "$CID" -c >"$MSG".maint <<EOF
 I checked the referenced files with get_maintainers and got the following enclosed between input tags for each file:
 <input>
 $(for ((i=0; i<${#maint[@]}; i++)); do echo "*file ${files[i]}:*"; echo "${maint[i]}";echo; done)
