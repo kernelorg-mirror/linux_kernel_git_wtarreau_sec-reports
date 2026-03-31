@@ -16,18 +16,28 @@ llm -m "$AGENT" --cid "$CID" -c "Emit a line starting with 'x-summary:' followed
 
 files=( )
 maint=( )
+cc=( )
 maint_all=""
 if grep -q '^x-file:' "$MSG".loc; then
     files=( $(grep '^x-file:' "$MSG".loc | cut -f2- -d: | tr ',' ' ' | tr ' ' '\n' | fgrep -vw "n/a" | sort -u) )
     for f in "${files[@]}"; do
         f="${f##[.ab]/}"
         o="$MSG.maint.${#maint[@]}"
+        # first get only maintainers of that specific sub-system. A few
+        # sometimes leak names (e.g. akpm) so use sed to extract the address.
+        a=$(cd "$KDIR"; ./scripts/get_maintainer.pl --no-tree --no-l --no-r --no-n --m  --no-git-fallback --pattern-depth 1 --no-substatus --no-rolestats "$f" 2>/dev/null | sed 's/^[^<]*<\([^>]*\)>/\1/')
+        # let's also build a multi-level maintainers list. If none is found
+        # for a file, let's involve git as well (not frequent).
         m=$(cd "$KDIR"; ./scripts/get_maintainer.pl "$f" 2>/dev/null)
         (echo "# file: $f"; echo "$m") > "$o"
         maint[${#maint[@]}]="$m"
         maint_all="${maint_all}${m}"
+        cc[${#cc[@]}]="$a"
     done
 fi
+
+for ((i=0; i<${#cc[@]}; i++)); do echo "${cc[i]}"; done | grep . | sort -u > "$MSG.cc"
+cc_all=$(echo $(cat "$MSG.cc") | sed -e 's: :, :g')
 
 if [ "${#maint_all}" -gt 0 ]; then
 	llm -m "$AGENT" --cid "$CID" -c >"$MSG".maint <<EOF
@@ -41,7 +51,7 @@ else
 	touch "$MSG".maint
 fi
 
-./append-lines -H "In-reply-to: $(sed -n '/^Message-Id:/Is,^[^:]*:[ ]*,,p' "$MSG")" -H "X-ai-processed: true" -B "--- automatically added below ---" -B "Subsystem: $(sed -n '/^x-subsys:/s,^[^:]*:[ ]*,,p' "$MSG.subsys")" -B "Files: ${files[*]}" -B "Cc: $(sed -n '/^x-cc:/s,^[^:]*:[ ]*,,p' "$MSG.maint")" -B "Summary: $(sed -n '/^x-summary:/s,^[^:]*:[ ]*,,p' "$MSG".summary)" -B "" -B "Thanks for your report. We've forwarded your original message to the maintainers and added them in Cc." -B "" -B "Since you've done all the analysis, do you have a patch to propose to fix this issue ? This would save some maintainers' time and you'd get full credit for finding and fixing this bug. For guidance on how to write patches, please see Documentation/process/submitting-patches.rst." -B "--- automatically added above ---" -B "" < "${MSG}" > "${MSG}.edited"
+./append-lines -H "In-reply-to: $(sed -n '/^Message-Id:/Is,^[^:]*:[ ]*,,p' "$MSG")" -H "Cc: $cc_all" -H "X-ai-processed: true" -B "--- automatically added below ---" -B "Subsystem: $(sed -n '/^x-subsys:/s,^[^:]*:[ ]*,,p' "$MSG.subsys")" -B "Files: ${files[*]}" -B "Cc: $(sed -n '/^x-cc:/s,^[^:]*:[ ]*,,p' "$MSG.maint")" -B "Summary: $(sed -n '/^x-summary:/s,^[^:]*:[ ]*,,p' "$MSG".summary)" -B "" -B "Thanks for your report. We've forwarded your original message to the maintainers and added them in Cc." -B "" -B "Since you've done all the analysis, do you have a patch to propose to fix this issue ? This would save some maintainers' time and you'd get full credit for finding and fixing this bug. For guidance on how to write patches, please see Documentation/process/submitting-patches.rst." -B "--- automatically added above ---" -B "" < "${MSG}" > "${MSG}.edited"
 
 # purge conversations related to this $CID
 (sqlite3 "$DB_PATH" "DELETE FROM responses WHERE conversation_id = '$CID';"
