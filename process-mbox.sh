@@ -14,6 +14,7 @@ llm -m "$AGENT" --cid "$CID" -c "Emit a line starting with 'x-subsys:' followed 
 
 llm -m "$AGENT" --cid "$CID" -c "Emit a line starting with 'x-summary:' followed by a quick summary of the claims of the report for maintainers. The goal is to have just one line of a few sentences to help maintainers figure if it's for them or for someone else." > "$MSG".summary
 
+files=( )
 maint=( )
 maint_all=""
 if grep -q '^x-file:' "$MSG".loc; then
@@ -40,7 +41,7 @@ else
 	touch "$MSG".maint
 fi
 
-./append-lines -H "In-reply-to: $(sed -n '/^Message-Id:/Is,^[^:]*:[ ]*,,p' "$MSG")" -H "X-ai-processed: true" -B "--- automatically added below ---" -B "Subsystem: $(sed -n '/^x-subsys:/s,^[^:]*:[ ]*,,p' "$MSG.subsys")" -B "Cc: $(sed -n '/^x-cc:/s,^[^:]*:[ ]*,,p' "$MSG.maint")" -B "Summary: $(sed -n '/^x-summary:/s,^[^:]*:[ ]*,,p' "$MSG".summary)" -B "" -B "Thanks for your report. We've forwarded your original message to the maintainers and added them in Cc." -B "" -B "Since you've done all the analysis, do you have a patch to propose to fix this issue ? This would save some maintainers' time and you'd get full credit for finding and fixing this bug. For guidance on how to write patches, please see Documentation/process/submitting-patches.rst." -B "--- automatically added above ---" -B "" < "${MSG}" > "${MSG}.edited"
+./append-lines -H "In-reply-to: $(sed -n '/^Message-Id:/Is,^[^:]*:[ ]*,,p' "$MSG")" -H "X-ai-processed: true" -B "--- automatically added below ---" -B "Subsystem: $(sed -n '/^x-subsys:/s,^[^:]*:[ ]*,,p' "$MSG.subsys")" -B "Files: ${files[*]}" -B "Cc: $(sed -n '/^x-cc:/s,^[^:]*:[ ]*,,p' "$MSG.maint")" -B "Summary: $(sed -n '/^x-summary:/s,^[^:]*:[ ]*,,p' "$MSG".summary)" -B "" -B "Thanks for your report. We've forwarded your original message to the maintainers and added them in Cc." -B "" -B "Since you've done all the analysis, do you have a patch to propose to fix this issue ? This would save some maintainers' time and you'd get full credit for finding and fixing this bug. For guidance on how to write patches, please see Documentation/process/submitting-patches.rst." -B "--- automatically added above ---" -B "" < "${MSG}" > "${MSG}.edited"
 
 # purge conversations related to this $CID
 (sqlite3 "$DB_PATH" "DELETE FROM responses WHERE conversation_id = '$CID';"
