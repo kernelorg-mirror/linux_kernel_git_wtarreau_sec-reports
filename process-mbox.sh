@@ -17,7 +17,7 @@ llm -m "$AGENT" --cid "$CID" -c "Emit a line starting with 'x-summary:' followed
 maint=( )
 maint_all=""
 if grep -q '^x-file:' "$MSG".loc; then
-    files=( $(grep '^x-file:' "$MSG".loc | cut -f2- -d: | tr ',' ' ') )
+    files=( $(grep '^x-file:' "$MSG".loc | cut -f2- -d: | tr ',' ' ' | tr ' ' '\n' | fgrep -vw "n/a" | sort -u) )
     for f in "${files[@]}"; do
         f="${f##[.ab]/}"
         o="$MSG.maint.${#maint[@]}"
