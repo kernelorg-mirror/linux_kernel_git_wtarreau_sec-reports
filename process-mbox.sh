@@ -28,7 +28,10 @@ if grep -q '^x-file:' "$MSG".loc; then
         a=$(cd "$KDIR"; ./scripts/get_maintainer.pl --no-tree --no-l --no-r --no-n --m  --no-git-fallback --pattern-depth 1 --no-substatus --no-rolestats "$f" 2>/dev/null | sed 's/^[^<]*<\([^>]*\)>/\1/')
         # let's also build a multi-level maintainers list. If none is found
         # for a file, let's involve git as well (not frequent).
-        m=$(cd "$KDIR"; ./scripts/get_maintainer.pl "$f" 2>/dev/null)
+        m=$(cd "$KDIR"; ./scripts/get_maintainer.pl --no-tree --no-l --no-r --m --no-git-fallback --no-substatus "$f" 2>/dev/null)
+        if [ -z "$m" ]; then
+            m=$(cd "$KDIR"; ./scripts/get_maintainer.pl --no-tree --no-l --no-r --m --no-substatus "$f" 2>/dev/null)
+        fi
         (echo "# file: $f"; echo "$m") > "$o"
         maint[${#maint[@]}]="$m"
         maint_all="${maint_all}${m}"
@@ -39,19 +42,10 @@ fi
 for ((i=0; i<${#cc[@]}; i++)); do echo "${cc[i]}"; done | grep . | sort -u > "$MSG.cc"
 cc_all=$(echo $(cat "$MSG.cc") | sed -e 's: :, :g')
 
-if [ "${#maint_all}" -gt 0 ]; then
-	llm -m "$AGENT" --cid "$CID" -c >"$MSG".maint <<EOF
-I checked the referenced files with get_maintainers and got the following enclosed between input tags for each file:
-<input>
-$(for ((i=0; i<${#maint[@]}; i++)); do echo "*file ${files[i]}:*"; echo "${maint[i]}";echo; done)
-</input>
-I'd like to get the maintainers' name+email on a line starting with 'x-cc:' and all delimited by a comma, so that I could easily turn that into a 'Cc:' header once I validate it. For each file, include all maintainers listed under the most specific and highest-priority role that appears first in the input. If multiple maintainers share the exact same most-specific role, include all of them. If a same maintainer appears for multiple files (which is common), print it only ones. Never dump reviewer nor list addresses!
-EOF
-else
-	touch "$MSG".maint
-fi
+for ((i=0; i<${#maint[@]}; i++)); do echo "${maint[i]}"; done | grep . | sort -u > "$MSG.maint"
+maint_all="$(cat "$MSG.maint")"
 
-./append-lines -H "In-reply-to: $(sed -n '/^Message-Id:/Is,^[^:]*:[ ]*,,p' "$MSG")" -H "Cc: $cc_all" -H "X-ai-processed: true" -B "--- automatically added below ---" -B "Subsystem: $(sed -n '/^x-subsys:/s,^[^:]*:[ ]*,,p' "$MSG.subsys")" -B "Files: ${files[*]}" -B "Cc: $(sed -n '/^x-cc:/s,^[^:]*:[ ]*,,p' "$MSG.maint")" -B "Summary: $(sed -n '/^x-summary:/s,^[^:]*:[ ]*,,p' "$MSG".summary)" -B "" -B "Thanks for your report. We've forwarded your original message to the maintainers and added them in Cc." -B "" -B "Since you've done all the analysis, do you have a patch to propose to fix this issue ? This would save some maintainers' time and you'd get full credit for finding and fixing this bug. For guidance on how to write patches, please see Documentation/process/submitting-patches.rst." -B "--- automatically added above ---" -B "" < "${MSG}" > "${MSG}.edited"
+./append-lines -H "In-reply-to: $(sed -n '/^Message-Id:/Is,^[^:]*:[ ]*,,p' "$MSG")" -H "Cc: $cc_all" -H "X-ai-processed: true" -B "--- automatically added below ---" -B "Subsystem: $(sed -n '/^x-subsys:/s,^[^:]*:[ ]*,,p' "$MSG.subsys")" -B "Files: ${files[*]}" -B "-- full maintainers list --" -B "$(cat "$MSG.maint")" -B "--" -B "Summary: $(sed -n '/^x-summary:/s,^[^:]*:[ ]*,,p' "$MSG".summary)" -B "" -B "Thanks for your report. We've forwarded your original message to the maintainers and added them in Cc." -B "" -B "Since you've done all the analysis, do you have a patch to propose to fix this issue ? This would save some maintainers' time and you'd get full credit for finding and fixing this bug. For guidance on how to write patches, please see Documentation/process/submitting-patches.rst." -B "--- automatically added above ---" -B "" < "${MSG}" > "${MSG}.edited"
 
 # purge conversations related to this $CID
 (sqlite3 "$DB_PATH" "DELETE FROM responses WHERE conversation_id = '$CID';"
