@@ -6,7 +6,7 @@ KDIR="${KDIR:-/usr/src/linux}"
 AGENT="${AGENT:-local}"
 DB_PATH=$(llm logs path)
 
-llm -m "$AGENT" -s "Analyze this email received on the linux kernel security list (attachments were dropped before passing it to you). Once done, you will emit a header 'x-file:' followed by the file names affected by the bug report, or, if it was not possible to figure affected file names, 'x-func:' with the affected function(s). Then I will process your responses and will come back with new instructions." < "$MSG" > "$MSG".loc
+llm -m "$AGENT" -s "Analyze this email received on the linux kernel security list (attachments were dropped before passing it to you). Once done, you will emit a header 'x-file:' followed by the file names affected by the bug report, or, if it was not possible to figure affected file names, 'x-func:' with the affected function(s). Then I will process your responses and will come back with new instructions. Do not emit non-ASCII characters nor emojis." < "$MSG" > "$MSG".loc
 
 CID=$(sqlite3 "$DB_PATH" "SELECT id FROM conversations ORDER BY rowid DESC LIMIT 1;")
 
