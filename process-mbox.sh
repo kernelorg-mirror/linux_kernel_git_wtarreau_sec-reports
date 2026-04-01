@@ -6,15 +6,22 @@ KDIR="${KDIR:-/usr/src/linux}"
 AGENT="${AGENT:-local}"
 DB_PATH=$(llm logs path)
 
-llm -m "$AGENT" -s "Analyze this email received on the linux kernel security list (attachments were dropped before passing it to you). Once done, you will emit a header 'x-file:' followed by the file names affected by the bug report, or, if it was not possible to figure affected file names, 'x-func:' with the affected function(s). Then I will process your responses and will come back with new instructions. Do not emit non-ASCII characters nor emojis." < "$MSG" > "$MSG".var
+llm -m "$AGENT" -s "Analyze this email received on the linux kernel security list (attachments were dropped before passing it to you). Once done, you will emit the following headers:
+  - x-file: followed by the file names affected by the bug report, or 'unknown' if it was not possible to figure affected file names ;
+  - x-func: followed by the affected function(s), or 'unknown' if it was not possible to figure them ;
+  - x-version: followed by the version(s) or the range of versions of kernels affected by this report, or 'unknown' if not found ;
+  - x-subsys: followed by the name of the subsystem affected by this report ;
+  - x-summary: followed by a quick summary of the claims of the report for maintainers. The goal is to have just one line of a few sentences to help maintainers figure if it's for them or for someone else ;
+
+Then I will process your responses and will come back with new instructions. Do not emit non-ASCII characters nor emojis." < "$MSG" > "$MSG".var
 
 CID=$(sqlite3 "$DB_PATH" "SELECT id FROM conversations ORDER BY rowid DESC LIMIT 1;")
 
-llm -m "$AGENT" --cid "$CID" -c "Emit a line starting with 'x-version:' followed by the version(s) or the range of versions of kernels affected by this report, or 'unknown' if not found." >> "$MSG".var
+#llm -m "$AGENT" --cid "$CID" -c "Emit a line starting with 'x-version:' followed by the version(s) or the range of versions of kernels affected by this report, or 'unknown' if not found." >> "$MSG".var
 
-llm -m "$AGENT" --cid "$CID" -c "Emit a line starting with 'x-subsys:' followed by the name of the subsystem affected by this report." >> "$MSG".var
+#llm -m "$AGENT" --cid "$CID" -c "Emit a line starting with 'x-subsys:' followed by the name of the subsystem affected by this report." >> "$MSG".sar
 
-llm -m "$AGENT" --cid "$CID" -c "Emit a line starting with 'x-summary:' followed by a quick summary of the claims of the report for maintainers. The goal is to have just one line of a few sentences to help maintainers figure if it's for them or for someone else." >> "$MSG".var
+#llm -m "$AGENT" --cid "$CID" -c "Emit a line starting with 'x-summary:' followed by a quick summary of the claims of the report for maintainers. The goal is to have just one line of a few sentences to help maintainers figure if it's for them or for someone else." >> "$MSG".var
 
 files=( )
 maint=( )
