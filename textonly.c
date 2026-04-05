@@ -279,6 +279,7 @@ void process_mbox(FILE *in)
 										else if (*c == '/') {
 											base64_word = (base64_word << 6) + 63;
 											base64_ofs++;
+											bits += 6;
 										}
 										else if (*c == '=') {
 											base64_word = (base64_word << 6);
