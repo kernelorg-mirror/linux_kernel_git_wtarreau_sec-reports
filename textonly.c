@@ -79,6 +79,47 @@ int b64dec(unsigned *word, int *bits, int *ofs, char c)
 	return nbbits;
 }
 
+/* returns the hex char value or -1 if not a hex char */
+int h2i(char c)
+{
+	return (c >= '0' && c <= '9') ? c - '0' :
+	       (c >= 'a' && c <= 'f') ? c - 'a' + 10 :
+	       (c >= 'A' && c <= 'F') ? c - 'A' + 10 :
+	       -1;
+}
+
+/* Decode a single line of quoted-printable text and emits it on stdout. Note
+ * that the spec says the input cannot be longer than 76 chars. Accepted line
+ * endings are CR, LF or NUL.
+ */
+void decode_qp_line(const char *line)
+{
+	int h, l, i;
+
+	for (i = 0; line[i] != '\r' && line[i] != '\n' && line[i] != '\0'; i++) {
+		if (line[i] != '=') {
+			putchar(line[i]);
+			continue;
+		}
+		if ((h = h2i(line[i + 1])) >= 0 && (l = h2i(line[i + 2])) >= 0) {
+			putchar((h << 4) + l);
+			i += 2;
+		}
+		else if (line[i + 1] == '\r' || line[i + 1] == '\n' || line[i + 1] == '\0') {
+			/* a lone '=' at the end of a line is a soft break: the
+			 * line continues on the next one.
+			 */
+			return;
+		}
+		else {
+			/* probably an encoding issue, let's dump the '='. */
+			putchar('=');
+		}
+	}
+	/* input is one line at a time, and soft break has already been handled */
+	putchar('\n');
+}
+
 /* returns true if <hdr> starts with <start>, ignoring case */
 int hdr_starts_with(const char *hdr, const char *start)
 {
@@ -123,6 +164,7 @@ void process_mbox(FILE *in)
 	const char *boundary;
 	char part_hdrs[4*MAX_LINE]; // should be sufficient for a few headers
 	int part_hdr_len = 0;
+	int is_qp = 0;
 
 	while (*read_hdr(in, line, next, sizeof(line))) {
 		if (strncmp(line, "From ", 5) == 0) {
@@ -130,6 +172,7 @@ void process_mbox(FILE *in)
 			printf("%s", line);
 			stack_ptr = -1;
 			is_multipart = 0;
+			is_qp = 0;
 			found_and_dumped = 0;
 
 			/* 1. HEADER: drop content-length, lines, and look for
@@ -153,6 +196,11 @@ void process_mbox(FILE *in)
 						store_boundary(boundary, boundaries[stack_ptr], sizeof(boundaries[stack_ptr]));
 						//printf("### boundaries[%d]=%s\n", stack_ptr, boundaries[stack_ptr]);
 					}
+					continue;
+				}
+
+				if (hdr_starts_with(line, "Content-Transfer-Encoding: quoted-printable")) {
+					is_qp = 1;
 					continue;
 				}
 
@@ -181,6 +229,12 @@ void process_mbox(FILE *in)
 			if (!is_multipart) {
 				printf("%s", line);
 				while (*next && strncmp(next, "From ", 5) != 0) {
+					if (is_qp) {
+						/* decode quoted printable */
+						decode_qp_line(next);
+					}
+					else
+						printf("%s", next);
 
 					if (!fgets(next, sizeof(next), stdin)) {
 						*next = 0;
@@ -225,6 +279,7 @@ void process_mbox(FILE *in)
 						part_hdr_len = 0;
 						part_hdrs[0] = 0;
 						is_base64 = 0;
+						is_qp = 0;
 
 						/* now time to inspect part-headers */
 						while (*read_hdr(in, line, next, sizeof(line))) {
@@ -262,6 +317,10 @@ void process_mbox(FILE *in)
 
 							if (hdr_starts_with(line, "Content-Transfer-Encoding: base64")) {
 								is_base64 = 1;
+								continue;
+							}
+							else if (hdr_starts_with(line, "Content-Transfer-Encoding: quoted-printable")) {
+								is_qp = 1;
 								continue;
 							}
 
@@ -312,6 +371,10 @@ void process_mbox(FILE *in)
 											bits = 0;
 										}
 									}
+								}
+								else if (is_qp) {
+									/* decode quoted printable */
+									decode_qp_line(next);
 								}
 								else
 									printf("%s", next);
