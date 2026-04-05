@@ -37,6 +37,48 @@ int is_spht(int ch)
 	return ch == ' ' || ch == '\t';
 }
 
+/* Complete word <w> by decoding char <c>. Returns the number of bits emitted
+ * (either 0 or 6), or an error (-1) if the char is not a base64 one. If <bits>
+ * is not NULL, it's incremented by the number of emitted bits. If <ofs> is
+ * not NULL, it's incremented by one for valid chars.
+ */
+int b64dec(unsigned *word, int *bits, int *ofs, char c)
+{
+	int nbbits = 6;
+
+	switch (c) {
+	case 'A'...'Z':
+		c += 0 - 'A';
+		break;
+	case 'a'...'z':
+		c += 26 - 'a';
+		break;
+	case '0'...'9':
+		c += 52 - '0';
+		break;
+	case '+':
+		c = 62;
+		break;
+	case '/':
+		c = 63;
+		break;
+	case '=':
+		/* end of block, no more byte to emit */
+		nbbits = 0;
+		c = 0;
+		break;
+	default:
+		return -1;
+	}
+
+	*word = (*word << 6) + (unsigned char)c;
+	if (bits)
+		*bits += nbbits;
+	if (ofs)
+		(*ofs)++;
+	return nbbits;
+}
+
 /* returns true if <hdr> starts with <start>, ignoring case */
 int hdr_starts_with(const char *hdr, const char *start)
 {
@@ -256,36 +298,8 @@ void process_mbox(FILE *in)
 								else {
 									/* decode and dump accumulated base64 bytes */
 									for (c = line; *c; c++) {
-										if (*c >= 'A' && *c <= 'Z') {
-											base64_word = (base64_word << 6) + (*c - 'A');
-											base64_ofs++;
-											bits += 6;
-										}
-										else if (*c >= 'a' && *c <= 'z') {
-											base64_word = (base64_word << 6) + (*c - 'a') + 26;
-											base64_ofs++;
-											bits += 6;
-										}
-										else if (*c >= '0' && *c <= '9') {
-											base64_word = (base64_word << 6) + (*c - '0') + 52;
-											base64_ofs++;
-											bits += 6;
-										}
-										else if (*c == '+') {
-											base64_word = (base64_word << 6) + 62;
-											base64_ofs++;
-											bits += 6;
-										}
-										else if (*c == '/') {
-											base64_word = (base64_word << 6) + 63;
-											base64_ofs++;
-											bits += 6;
-										}
-										else if (*c == '=') {
-											base64_word = (base64_word << 6);
-											base64_ofs++;
-										}
-
+										if (b64dec(&base64_word, &bits, &base64_ofs, *c) < 0)
+											continue;
 										if (base64_ofs == 4) {
 											if (bits >= 8)
 												putchar((unsigned char)(base64_word >> 16));
