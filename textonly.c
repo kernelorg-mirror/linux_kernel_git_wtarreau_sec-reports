@@ -181,8 +181,11 @@ void process_mbox(FILE *in)
 			if (!is_multipart) {
 				printf("%s", line);
 				while (*next && strncmp(next, "From ", 5) != 0) {
-					read_hdr(in, line, next, sizeof(line));
-					printf("%s", line);
+
+					if (!fgets(next, sizeof(next), stdin)) {
+						*next = 0;
+						break;
+					}
 				}
 			} else {
 				/* Multipart: let's not emit the empty line yet
@@ -285,19 +288,17 @@ void process_mbox(FILE *in)
 							char *c;
 
 							printf("%s", part_hdrs);
-							while (*read_hdr(in, line, next, sizeof(line))) {
-								if (line[0] == '-' && line[1] == '-') {
+							while (*next) {
+								if (next[0] == '-' && next[1] == '-') {
 									for (i = 0; i <= stack_ptr; i++)
-										if (strncmp(line + 2, boundaries[i], strlen(boundaries[i])) == 0)
+										if (strncmp(next + 2, boundaries[i], strlen(boundaries[i])) == 0)
 											break;
 									if (i <= stack_ptr)
 										break;
 								}
-								if (!is_base64)
-									printf("%s", line);
-								else {
+								if (is_base64) {
 									/* decode and dump accumulated base64 bytes */
-									for (c = line; *c; c++) {
+									for (c = next; *c; c++) {
 										if (b64dec(&base64_word, &bits, &base64_ofs, *c) < 0)
 											continue;
 										if (base64_ofs == 4) {
@@ -311,6 +312,13 @@ void process_mbox(FILE *in)
 											bits = 0;
 										}
 									}
+								}
+								else
+									printf("%s", next);
+
+								if (!fgets(next, sizeof(next), stdin)) {
+									*next = 0;
+									break;
 								}
 							}
 							found_and_dumped = 1;
