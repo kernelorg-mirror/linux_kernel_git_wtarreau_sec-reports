@@ -196,6 +196,23 @@ void consume(long *clen, const char *line)
 		*clen -= strlen(line);
 }
 
+/* If <line> is a MIME boundary delimiter, i.e. "--" followed by one of the
+ * boundaries currently on the stack (levels 0..<stack_ptr>), return its level,
+ * else -1. The deepest matching level is returned so that an outer boundary
+ * can close the inner levels it encloses.
+ */
+int boundary_level(const char *line, char boundaries[][MAX_LINE], int stack_ptr)
+{
+	int lvl;
+
+	if (line[0] != '-' || line[1] != '-')
+		return -1;
+	for (lvl = stack_ptr; lvl >= 0; lvl--)
+		if (strncmp(line + 2, boundaries[lvl], strlen(boundaries[lvl])) == 0)
+			return lvl;
+	return -1;
+}
+
 void process_mbox(FILE *in)
 {
 	char line[MAX_LINE], next[MAX_LINE];
@@ -305,22 +322,15 @@ void process_mbox(FILE *in)
 				 */
 				while (!found_and_dumped && !body_done(clen, next) &&
 				       *read_hdr(in, line, next, sizeof(line))) {
+					int lvl;
+
 					consume(&clen, line);
 
 					// Check for any known boundary
-					if (line[0] == '-' && line[1] == '-' && stack_ptr >= 0) {
-						int i, lvl = -1;
+					lvl = boundary_level(line, boundaries, stack_ptr);
+					if (lvl >= 0) {
 						int is_text_plain = 0;
 						int is_base64 = 0;
-
-						/* check if this looks like a known boundary */
-						for (lvl = stack_ptr; lvl >= 0; lvl--) {
-							if (strncmp(line + 2, boundaries[lvl], strlen(boundaries[lvl])) == 0)
-								break;
-						}
-
-						if (lvl < 0)
-							continue;
 
 						/* this matches a known boundary, adjust the current stack
 						 * level and skip that line.
@@ -355,13 +365,8 @@ void process_mbox(FILE *in)
 								 */
 								while (*read_hdr(in, line, next, sizeof(line))) {
 									consume(&clen, line);
-									if (line[0] == '-' && line[1] == '-') {
-										for (i = 0; i <= stack_ptr; i++)
-											if (strncmp(line + 2, boundaries[i], strlen(boundaries[i])) == 0)
-												break;
-										if (i <= stack_ptr)
-											break;
-									}
+									if (boundary_level(line, boundaries, stack_ptr) >= 0)
+										break;
 								}
 								/* we've skipped all multipart headers, the blank
 								 * line, and the boundary, so we should now expect
@@ -405,13 +410,8 @@ void process_mbox(FILE *in)
 
 							printf("%s", part_hdrs);
 							while (*next) {
-								if (next[0] == '-' && next[1] == '-') {
-									for (i = 0; i <= stack_ptr; i++)
-										if (strncmp(next + 2, boundaries[i], strlen(boundaries[i])) == 0)
-											break;
-									if (i <= stack_ptr)
-										break;
-								}
+								if (boundary_level(next, boundaries, stack_ptr) >= 0)
+									break;
 								if (clen >= 0) {
 									if (clen <= 0)
 										break;
