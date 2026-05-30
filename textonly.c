@@ -276,6 +276,137 @@ void dump_leaf(FILE *in, char *next, long *clen, char boundaries[][MAX_LINE],
 	}
 }
 
+/* Read one MIME part's headers from <in> into <hdrs> (of size <hdrs_size>),
+ * stopping after the blank line that ends them. Each header line is charged to
+ * the Content-Length budget <*clen>. The Content-Transfer-Encoding and a nested
+ * "Content-Type: multipart" line are interpreted but not stored, everything else
+ * (including the terminating blank line) is appended to <hdrs>. On return:
+ *   *is_text_plain is set if the part is text/plain;
+ *   *is_base64 / *is_qp reflect its transfer encoding;
+ *   *is_nested is set if the part is itself multipart and there was stack room,
+ *   in which case its boundary has been stored into boundaries[depth + 1].
+ */
+void read_part_hdrs(FILE *in, char *line, char *next, char *hdrs, int hdrs_size,
+                    char boundaries[][MAX_LINE], int depth, long *clen,
+                    int *is_text_plain, int *is_base64, int *is_qp, int *is_nested)
+{
+	const char *boundary;
+	int len = 0;
+
+	hdrs[0] = 0;
+	*is_text_plain = *is_base64 = *is_qp = *is_nested = 0;
+
+	while (*read_hdr(in, line, next, MAX_LINE)) {
+		int ret;
+
+		consume(clen, line);
+
+		if (!*is_nested &&
+		    hdr_starts_with(line, "Content-Type: multipart") &&
+		    depth + 1 < MAX_STACK) {
+			boundary = strstr(line, "boundary=");
+			if (boundary) {
+				store_boundary(boundary, boundaries[depth + 1], MAX_LINE);
+				*is_nested = 1;
+			}
+			continue;
+		}
+
+		if (hdr_starts_with(line, "Content-Transfer-Encoding: base64")) {
+			*is_base64 = 1;
+			continue;
+		}
+		else if (hdr_starts_with(line, "Content-Transfer-Encoding: quoted-printable")) {
+			*is_qp = 1;
+			continue;
+		}
+
+		/* the rest is always appended */
+		ret = snprintf(hdrs + len, hdrs_size - len, "%s", line);
+		if (ret >= 0 && ret < hdrs_size - len)
+			len += ret;
+
+		if (is_crlf(line[0]))
+			break;
+
+		if (hdr_starts_with(line, "Content-Type: text/plain"))
+			*is_text_plain = 1;
+	}
+}
+
+/* Process the MIME parts at one multipart level, where boundaries[depth] is this
+ * level's boundary (already stored by the caller). Reads from the shared
+ * look-ahead, emits the headers and decoded body of the first text/plain leaf
+ * found anywhere in the subtree (setting *found), and drops every other part,
+ * recursing into nested multipart wrappers. Each consumed line is charged to
+ * <*clen>. Returns the level of the boundary delimiter that ended this level:
+ * <depth> - 1 for our own closing delimiter, or a smaller value for an ancestor
+ * delimiter that must keep unwinding; returns -1 once a part was emitted or the
+ * input/body is exhausted. <part_hdrs> is a caller-provided scratch buffer.
+ */
+int walk_level(FILE *in, char *line, char *next, char boundaries[][MAX_LINE],
+               int depth, char *part_hdrs, long *clen, int *found)
+{
+	for (;;) {
+		int lvl, is_text_plain, is_base64, is_qp, is_nested, r;
+
+		if (*found || body_done(*clen, next))
+			return -1;
+		if (!*read_hdr(in, line, next, MAX_LINE))
+			return -1;
+		consume(clen, line);
+
+	have_line:
+		/* Anything that is not one of our (or an ancestor's) boundary
+		 * delimiters is preamble or a skipped part's body: drop it.
+		 */
+		lvl = boundary_level(line, boundaries, depth);
+		if (lvl < 0)
+			continue;
+		if (lvl < depth)
+			return lvl;		/* ancestor boundary: keep unwinding */
+
+		/* boundary_level() has already proven <line> is
+		 * "--<boundaries[depth]>...". This is what tells us we hit a
+		 * boundary at all. is_close_delim() does not re-check the
+		 * boundary; it only looks at the bytes after it to tell a
+		 * closing "--<boundary>--" from a separator "--<boundary>".
+		 */
+		if (is_close_delim(line, boundaries[depth]))
+			return depth - 1;	/* our closing delimiter */
+
+		/* a separator "--<boundary>" at our level: a new part begins */
+		read_part_hdrs(in, line, next, part_hdrs, 4 * MAX_LINE, boundaries,
+		               depth, clen, &is_text_plain, &is_base64, &is_qp, &is_nested);
+
+		if (is_nested) {
+			r = walk_level(in, line, next, boundaries, depth + 1,
+			               part_hdrs, clen, found);
+			if (*found)
+				return -1;
+			if (r < depth)
+				return r;	/* an ancestor's delimiter bubbled up */
+			/* <line> holds the delimiter that stopped the child;
+			 * re-examine it at our level (our separator, our close,
+			 * or a now-irrelevant inner close to drop past).
+			 */
+			goto have_line;
+		}
+
+		if (is_text_plain && !*found) {
+			/* dump its headers (so we keep the content-type and the
+			 * transfer-encoding) followed by its decoded body.
+			 */
+			printf("%s", part_hdrs);
+			dump_leaf(in, next, clen, boundaries, depth, is_base64, is_qp);
+			*found = 1;
+			return -1;
+		}
+
+		/* a non-text leaf: its body is dropped by the loop above */
+	}
+}
+
 void process_mbox(FILE *in)
 {
 	char line[MAX_LINE], next[MAX_LINE];
@@ -285,7 +416,6 @@ void process_mbox(FILE *in)
 	int found_and_dumped = 0;
 	const char *boundary;
 	char part_hdrs[4*MAX_LINE]; // should be sufficient for a few headers
-	int part_hdr_len = 0;
 	int is_qp = 0;
 	long clen = -1;	/* body bytes left to consume per Content-Length, or -1 */
 
@@ -375,108 +505,15 @@ void process_mbox(FILE *in)
 					}
 				}
 			} else {
-				/* Multipart: let's not emit the empty line yet
-				 * because we want to append the headers of the
-				 * first text/plain part. The boundary appears as
-				 * the first line of header, starting with "--"
-				 * suffixed by the programmed boundary. Be
-				 * careful, some mailers set boundaries starting
-				 * with "--".
+				/* Multipart: descend through the parts, recursing into
+				 * any nested multipart wrappers, and emit the first
+				 * text/plain leaf found. We don't emit the empty line
+				 * that ended the headers; if no text part is found we
+				 * emit a lone blank line below. boundaries[0] holds the
+				 * top-level boundary, stored while reading the headers.
 				 */
-				while (!found_and_dumped && !body_done(clen, next) &&
-				       *read_hdr(in, line, next, sizeof(line))) {
-					int lvl;
-
-					consume(&clen, line);
-
-					// Check for any known boundary
-					lvl = boundary_level(line, boundaries, stack_ptr);
-					if (lvl >= 0) {
-						int is_text_plain = 0;
-						int is_base64 = 0;
-
-						/* boundary_level() has already proven <line> is
-						 * "--<boundaries[depth]>...". This is what tells us
-						 * we hit a boundary at all. is_close_delim() does
-						 * not re-check the boundary; it only looks at the
-						 * bytes after it to tell a closing "--<boundary>--"
-						 * from a separator "--<boundary>".
-						 */
-						if (is_close_delim(line, boundaries[lvl])) {
-							stack_ptr = lvl - 1;
-							continue;
-						}
-						stack_ptr = lvl;
-
-						part_hdr_len = 0;
-						part_hdrs[0] = 0;
-						is_base64 = 0;
-						is_qp = 0;
-
-						/* now time to inspect part-headers */
-						while (*read_hdr(in, line, next, sizeof(line))) {
-							int ret;
-
-							consume(&clen, line);
-
-							if (hdr_starts_with(line, "Content-Type: multipart") && stack_ptr < MAX_STACK - 1) {
-								/* this is a nested multipart, the parent is likely multipart/alternative */
-								boundary = strstr(line, "boundary=");
-								if (boundary) {
-									stack_ptr++;
-									store_boundary(boundary, boundaries[stack_ptr], sizeof(boundaries[stack_ptr]));
-								}
-								/* this format is recursive, we're supposed to have
-								 * other optional headers, a blank line, a boundary,
-								 * and headers. It's easier to explicitly match them
-								 * here.
-								 */
-								while (*read_hdr(in, line, next, sizeof(line))) {
-									consume(&clen, line);
-									if (boundary_level(line, boundaries, stack_ptr) >= 0)
-										break;
-								}
-								/* we've skipped all multipart headers, the blank
-								 * line, and the boundary, so we should now expect
-								 * the part's headers.
-								 */
-								part_hdr_len = 0;
-								part_hdrs[0] = 0;
-								continue;
-							}
-
-							if (hdr_starts_with(line, "Content-Transfer-Encoding: base64")) {
-								is_base64 = 1;
-								continue;
-							}
-							else if (hdr_starts_with(line, "Content-Transfer-Encoding: quoted-printable")) {
-								is_qp = 1;
-								continue;
-							}
-
-							/* the rest is always appended */
-							ret = snprintf(part_hdrs + part_hdr_len, sizeof(part_hdrs) - part_hdr_len, "%s", line);
-							if (ret >= 0 && ret < sizeof(part_hdrs) - part_hdr_len)
-								part_hdr_len += ret;
-
-							if (is_crlf(line[0]))
-								break;
-
-							if (hdr_starts_with(line, "Content-Type: text/plain"))
-								is_text_plain = 1;
-						}
-
-						if (is_text_plain) {
-							/* OK that's finally text/plain, we're going to dump its
-							 * headers so that we have the content-type and even the
-							 * content-transfer-encoding.
-							 */
-							printf("%s", part_hdrs);
-							dump_leaf(in, next, &clen, boundaries, stack_ptr, is_base64, is_qp);
-							found_and_dumped = 1;
-						}
-					}
-				}
+				walk_level(in, line, next, boundaries, 0, part_hdrs,
+				           &clen, &found_and_dumped);
 
 				/* If we found nothing, ensure a blank line exists */
 				if (!found_and_dumped)
