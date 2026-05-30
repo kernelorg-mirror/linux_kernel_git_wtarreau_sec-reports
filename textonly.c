@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdlib.h>
 
 #define MAX_LINE 4096
 #define MAX_STACK 10
@@ -154,6 +155,20 @@ const char *read_hdr(FILE *in, char *curr, char *next, int size)
 	return curr;
 }
 
+/* Tells whether the message body is over. <clen> is the number of body bytes
+ * still to consume according to the Content-Length header, or negative if the
+ * header was absent. With a Content-Length, the body ends exactly when the
+ * count is exhausted, which is robust against "From " lines inlined in the body
+ * (e.g. quoted mails or pasted patches). Without one, we fall back to the
+ * historical heuristic: the body ends at the next mbox "From " line.
+ */
+int body_done(long clen, const char *line)
+{
+	if (clen >= 0)
+		return clen <= 0;
+	return strncmp(line, "From ", 5) == 0;
+}
+
 void process_mbox(FILE *in)
 {
 	char line[MAX_LINE], next[MAX_LINE];
@@ -165,6 +180,7 @@ void process_mbox(FILE *in)
 	char part_hdrs[4*MAX_LINE]; // should be sufficient for a few headers
 	int part_hdr_len = 0;
 	int is_qp = 0;
+	long clen = -1;	/* body bytes left to consume per Content-Length, or -1 */
 
 	while (*read_hdr(in, line, next, sizeof(line))) {
 		if (strncmp(line, "From ", 5) == 0) {
@@ -174,15 +190,22 @@ void process_mbox(FILE *in)
 			is_multipart = 0;
 			is_qp = 0;
 			found_and_dumped = 0;
+			clen = -1;
 
-			/* 1. HEADER: drop content-length, lines, and look for
-			 * content-type. If multipart, we'll inspect attachments.
-			 * We stop before the empty line. Note that CR/LF are
-			 * part of the line here.
+			/* 1. HEADER: capture and drop content-length, drop lines,
+			 * and look for content-type. If multipart, we'll inspect
+			 * attachments. We stop before the empty line. Note that
+			 * CR/LF are part of the line here.
 			 */
 			while (*read_hdr(in, line, next, sizeof(line)) && !is_crlf(line[0])) {
-				if (hdr_starts_with(line, "Content-Length:"))
+				if (hdr_starts_with(line, "Content-Length:")) {
+					/* keep the value to delimit the body, but
+					 * don't emit it: the body we produce will
+					 * have a different size.
+					 */
+					clen = atol(line + strlen("Content-Length:"));
 					continue;
+				}
 
 				if (hdr_starts_with(line, "Lines:"))
 					continue;
@@ -224,11 +247,14 @@ void process_mbox(FILE *in)
 			/* We've reached the empty line, we're now inspecting
 			 * the body. If not multipart, we dump everything and
 			 * we're done till the next message. We have the next
-			 * line in <next>.
+			 * line in <next>. The empty line is not part of the body
+			 * counted by Content-Length.
 			 */
 			if (!is_multipart) {
 				printf("%s", line);
-				while (*next && strncmp(next, "From ", 5) != 0) {
+				while (*next && !body_done(clen, next)) {
+					if (clen >= 0)
+						clen -= strlen(next);
 					if (is_qp) {
 						/* decode quoted printable */
 						decode_qp_line(next);
@@ -236,7 +262,7 @@ void process_mbox(FILE *in)
 					else
 						printf("%s", next);
 
-					if (!fgets(next, sizeof(next), stdin)) {
+					if (!fgets(next, sizeof(next), in)) {
 						*next = 0;
 						break;
 					}
@@ -250,9 +276,11 @@ void process_mbox(FILE *in)
 				 * careful, some mailers set boundaries starting
 				 * with "--".
 				 */
-				while (!found_and_dumped &&
-				       strncmp(next, "From ", 5) != 0 &&
+				while (!found_and_dumped && !body_done(clen, next) &&
 				       *read_hdr(in, line, next, sizeof(line))) {
+					if (clen >= 0)
+						clen -= strlen(line);
+
 					// Check for any known boundary
 					if (line[0] == '-' && line[1] == '-' && stack_ptr >= 0) {
 						int i, lvl = -1;
@@ -285,6 +313,9 @@ void process_mbox(FILE *in)
 						while (*read_hdr(in, line, next, sizeof(line))) {
 							int ret;
 
+							if (clen >= 0)
+								clen -= strlen(line);
+
 							if (hdr_starts_with(line, "Content-Type: multipart") && stack_ptr < MAX_STACK - 1) {
 								/* this is a nested multipart, the parent is likely multipart/alternative */
 								boundary = strstr(line, "boundary=");
@@ -298,6 +329,8 @@ void process_mbox(FILE *in)
 								 * here.
 								 */
 								while (*read_hdr(in, line, next, sizeof(line))) {
+									if (clen >= 0)
+										clen -= strlen(line);
 									if (line[0] == '-' && line[1] == '-') {
 										for (i = 0; i <= stack_ptr; i++)
 											if (strncmp(line + 2, boundaries[i], strlen(boundaries[i])) == 0)
@@ -355,6 +388,11 @@ void process_mbox(FILE *in)
 									if (i <= stack_ptr)
 										break;
 								}
+								if (clen >= 0) {
+									if (clen <= 0)
+										break;
+									clen -= strlen(next);
+								}
 								if (is_base64) {
 									/* decode and dump accumulated base64 bytes */
 									for (c = next; *c; c++) {
@@ -379,7 +417,7 @@ void process_mbox(FILE *in)
 								else
 									printf("%s", next);
 
-								if (!fgets(next, sizeof(next), stdin)) {
+								if (!fgets(next, sizeof(next), in)) {
 									*next = 0;
 									break;
 								}
@@ -388,14 +426,17 @@ void process_mbox(FILE *in)
 						}
 					}
 				}
-                
+
 				/* If we found nothing, ensure a blank line exists */
 				if (!found_and_dumped)
 					printf("\n");
 
 				/* skip to end or next mail */
-				while (*next && strncmp(next, "From ", 5) != 0)
+				while (*next && !body_done(clen, next)) {
 					read_hdr(in, line, next, sizeof(line));
+					if (clen >= 0)
+						clen -= strlen(line);
+				}
 			}
 		}
 	}
