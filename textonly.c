@@ -213,6 +213,19 @@ int boundary_level(const char *line, char boundaries[][MAX_LINE], int stack_ptr)
 	return -1;
 }
 
+/* True if <line> is the closing delimiter "--<boundary>--" rather than a plain
+ * part separator "--<boundary>". This does NOT verify that <line> matches
+ * <boundary> at all: it only inspects the two bytes right after the boundary.
+ * The caller must have already established, via boundary_level(), that <line>
+ * begins with "--" followed by <boundary>; otherwise the result is meaningless.
+ */
+int is_close_delim(const char *line, const char *boundary)
+{
+	int n = strlen(boundary);
+
+	return line[2 + n] == '-' && line[2 + n + 1] == '-';
+}
+
 /* Emit the body of a leaf (non-multipart) MIME part, decoding base64 or
  * quoted-printable as requested, and counting the produced bytes. Stops at a
  * known boundary delimiter (levels 0..<level>), when the Content-Length budget
@@ -382,13 +395,18 @@ void process_mbox(FILE *in)
 						int is_text_plain = 0;
 						int is_base64 = 0;
 
-						/* this matches a known boundary, adjust the current stack
-						 * level and skip that line.
+						/* boundary_level() has already proven <line> is
+						 * "--<boundaries[depth]>...". This is what tells us
+						 * we hit a boundary at all. is_close_delim() does
+						 * not re-check the boundary; it only looks at the
+						 * bytes after it to tell a closing "--<boundary>--"
+						 * from a separator "--<boundary>".
 						 */
-						if (strncmp(line, boundaries[lvl], strlen(boundaries[lvl])) == 0) {
-							stack_ptr = lvl - 1; // Close this level and all nested levels
+						if (is_close_delim(line, boundaries[lvl])) {
+							stack_ptr = lvl - 1;
 							continue;
 						}
+						stack_ptr = lvl;
 
 						part_hdr_len = 0;
 						part_hdrs[0] = 0;
