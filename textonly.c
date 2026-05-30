@@ -187,6 +187,15 @@ int body_done(long clen, const char *line)
 	return strncmp(line, "From ", 5) == 0;
 }
 
+/* Account <line> as consumed body input against the Content-Length budget
+ * <*clen>. No-op when no Content-Length was present (<*clen> negative).
+ */
+void consume(long *clen, const char *line)
+{
+	if (*clen >= 0)
+		*clen -= strlen(line);
+}
+
 void process_mbox(FILE *in)
 {
 	char line[MAX_LINE], next[MAX_LINE];
@@ -272,8 +281,7 @@ void process_mbox(FILE *in)
 			if (!is_multipart) {
 				printf("%s", line);
 				while (*next && !body_done(clen, next)) {
-					if (clen >= 0)
-						clen -= strlen(next);
+					consume(&clen, next);
 					if (is_qp) {
 						/* decode quoted printable */
 						decode_qp_line(next);
@@ -297,8 +305,7 @@ void process_mbox(FILE *in)
 				 */
 				while (!found_and_dumped && !body_done(clen, next) &&
 				       *read_hdr(in, line, next, sizeof(line))) {
-					if (clen >= 0)
-						clen -= strlen(line);
+					consume(&clen, line);
 
 					// Check for any known boundary
 					if (line[0] == '-' && line[1] == '-' && stack_ptr >= 0) {
@@ -332,8 +339,7 @@ void process_mbox(FILE *in)
 						while (*read_hdr(in, line, next, sizeof(line))) {
 							int ret;
 
-							if (clen >= 0)
-								clen -= strlen(line);
+							consume(&clen, line);
 
 							if (hdr_starts_with(line, "Content-Type: multipart") && stack_ptr < MAX_STACK - 1) {
 								/* this is a nested multipart, the parent is likely multipart/alternative */
@@ -348,8 +354,7 @@ void process_mbox(FILE *in)
 								 * here.
 								 */
 								while (*read_hdr(in, line, next, sizeof(line))) {
-									if (clen >= 0)
-										clen -= strlen(line);
+									consume(&clen, line);
 									if (line[0] == '-' && line[1] == '-') {
 										for (i = 0; i <= stack_ptr; i++)
 											if (strncmp(line + 2, boundaries[i], strlen(boundaries[i])) == 0)
@@ -410,8 +415,8 @@ void process_mbox(FILE *in)
 								if (clen >= 0) {
 									if (clen <= 0)
 										break;
-									clen -= strlen(next);
 								}
+								consume(&clen, next);
 								if (is_base64) {
 									/* decode and dump accumulated base64 bytes */
 									for (c = next; *c; c++) {
@@ -453,8 +458,7 @@ void process_mbox(FILE *in)
 				/* skip to end or next mail */
 				while (*next && !body_done(clen, next)) {
 					read_hdr(in, line, next, sizeof(line));
-					if (clen >= 0)
-						clen -= strlen(line);
+					consume(&clen, line);
 				}
 			}
 
