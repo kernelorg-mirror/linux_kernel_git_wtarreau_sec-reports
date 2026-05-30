@@ -213,6 +213,56 @@ int boundary_level(const char *line, char boundaries[][MAX_LINE], int stack_ptr)
 	return -1;
 }
 
+/* Emit the body of a leaf (non-multipart) MIME part, decoding base64 or
+ * quoted-printable as requested, and counting the produced bytes. Stops at a
+ * known boundary delimiter (levels 0..<level>), when the Content-Length budget
+ * <*clen> is exhausted, or at end of input.
+ */
+void dump_leaf(FILE *in, char *next, long *clen, char boundaries[][MAX_LINE],
+               int level, int is_base64, int is_qp)
+{
+	unsigned base64_word = 0;
+	int base64_ofs = 0;
+	int bits = 0;
+	char *c;
+
+	while (*next) {
+		if (boundary_level(next, boundaries, level) >= 0)
+			break;
+		if (*clen >= 0 && *clen <= 0)
+			break;
+		consume(clen, next);
+		if (is_base64) {
+			/* decode and dump accumulated base64 bytes */
+			for (c = next; *c; c++) {
+				if (b64dec(&base64_word, &bits, &base64_ofs, *c) < 0)
+					continue;
+				if (base64_ofs == 4) {
+					if (bits >= 8)
+						put_body_ch((unsigned char)(base64_word >> 16));
+					if (bits >= 16)
+						put_body_ch((unsigned char)(base64_word >> 8));
+					if (bits >= 24)
+						put_body_ch((unsigned char)base64_word);
+					base64_ofs = 0;
+					bits = 0;
+				}
+			}
+		}
+		else if (is_qp) {
+			/* decode quoted printable */
+			decode_qp_line(next);
+		}
+		else
+			put_body_str(next);
+
+		if (!fgets(next, MAX_LINE, in)) {
+			*next = 0;
+			break;
+		}
+	}
+}
+
 void process_mbox(FILE *in)
 {
 	char line[MAX_LINE], next[MAX_LINE];
@@ -403,49 +453,8 @@ void process_mbox(FILE *in)
 							 * headers so that we have the content-type and even the
 							 * content-transfer-encoding.
 							 */
-							unsigned base64_word = 0;
-							int base64_ofs = 0;
-							int bits = 0;
-							char *c;
-
 							printf("%s", part_hdrs);
-							while (*next) {
-								if (boundary_level(next, boundaries, stack_ptr) >= 0)
-									break;
-								if (clen >= 0) {
-									if (clen <= 0)
-										break;
-								}
-								consume(&clen, next);
-								if (is_base64) {
-									/* decode and dump accumulated base64 bytes */
-									for (c = next; *c; c++) {
-										if (b64dec(&base64_word, &bits, &base64_ofs, *c) < 0)
-											continue;
-										if (base64_ofs == 4) {
-											if (bits >= 8)
-												put_body_ch((unsigned char)(base64_word >> 16));
-											if (bits >= 16)
-												put_body_ch((unsigned char)(base64_word >> 8));
-											if (bits >= 24)
-												put_body_ch((unsigned char)base64_word);
-											base64_ofs = 0;
-											bits = 0;
-										}
-									}
-								}
-								else if (is_qp) {
-									/* decode quoted printable */
-									decode_qp_line(next);
-								}
-								else
-									put_body_str(next);
-
-								if (!fgets(next, sizeof(next), in)) {
-									*next = 0;
-									break;
-								}
-							}
+							dump_leaf(in, next, &clen, boundaries, stack_ptr, is_base64, is_qp);
 							found_and_dumped = 1;
 						}
 					}
