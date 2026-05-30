@@ -7,6 +7,24 @@
 #define MAX_STACK 10
 
 int do_clean_hdr = 0;
+char *clen_file = NULL;	/* if set, write the produced body length here */
+long tot_body_bytes = 0;	/* number of body bytes emitted for the current message */
+
+/* emit a string as body content, counting the bytes so that we can report the
+ * resulting Content-Length.
+ */
+void put_body_str(const char *s)
+{
+	fputs(s, stdout);
+	tot_body_bytes += strlen(s);
+}
+
+/* emit a single byte as body content, counting it for the Content-Length */
+void put_body_ch(int c)
+{
+	putchar(c);
+	tot_body_bytes++;
+}
 
 /* extract the boundary from <in> which must start at "boundary=" into <store>
  * of size <size>. It takes care of quoted strings.
@@ -99,11 +117,11 @@ void decode_qp_line(const char *line)
 
 	for (i = 0; line[i] != '\r' && line[i] != '\n' && line[i] != '\0'; i++) {
 		if (line[i] != '=') {
-			putchar(line[i]);
+			put_body_ch(line[i]);
 			continue;
 		}
 		if ((h = h2i(line[i + 1])) >= 0 && (l = h2i(line[i + 2])) >= 0) {
-			putchar((h << 4) + l);
+			put_body_ch((h << 4) + l);
 			i += 2;
 		}
 		else if (line[i + 1] == '\r' || line[i + 1] == '\n' || line[i + 1] == '\0') {
@@ -114,11 +132,11 @@ void decode_qp_line(const char *line)
 		}
 		else {
 			/* probably an encoding issue, let's dump the '='. */
-			putchar('=');
+			put_body_ch('=');
 		}
 	}
 	/* input is one line at a time, and soft break has already been handled */
-	putchar('\n');
+	put_body_ch('\n');
 }
 
 /* returns true if <hdr> starts with <start>, ignoring case */
@@ -191,6 +209,7 @@ void process_mbox(FILE *in)
 			is_qp = 0;
 			found_and_dumped = 0;
 			clen = -1;
+			tot_body_bytes = 0;
 
 			/* 1. HEADER: capture and drop content-length, drop lines,
 			 * and look for content-type. If multipart, we'll inspect
@@ -260,7 +279,7 @@ void process_mbox(FILE *in)
 						decode_qp_line(next);
 					}
 					else
-						printf("%s", next);
+						put_body_str(next);
 
 					if (!fgets(next, sizeof(next), in)) {
 						*next = 0;
@@ -400,11 +419,11 @@ void process_mbox(FILE *in)
 											continue;
 										if (base64_ofs == 4) {
 											if (bits >= 8)
-												putchar((unsigned char)(base64_word >> 16));
+												put_body_ch((unsigned char)(base64_word >> 16));
 											if (bits >= 16)
-												putchar((unsigned char)(base64_word >> 8));
+												put_body_ch((unsigned char)(base64_word >> 8));
 											if (bits >= 24)
-												putchar((unsigned char)base64_word);
+												put_body_ch((unsigned char)base64_word);
 											base64_ofs = 0;
 											bits = 0;
 										}
@@ -415,7 +434,7 @@ void process_mbox(FILE *in)
 									decode_qp_line(next);
 								}
 								else
-									printf("%s", next);
+									put_body_str(next);
 
 								if (!fgets(next, sizeof(next), in)) {
 									*next = 0;
@@ -438,17 +457,39 @@ void process_mbox(FILE *in)
 						clen -= strlen(line);
 				}
 			}
+
+			/* report the number of body bytes we produced, so the
+			 * next stage of the pipeline can compute an accurate
+			 * Content-Length for the rewritten message.
+			 */
+			if (clen_file) {
+				FILE *cf = fopen(clen_file, "w");
+
+				if (cf) {
+					fprintf(cf, "%ld\n", tot_body_bytes);
+					fclose(cf);
+				}
+			}
 		}
 	}
 }
 
 int main(int argc, char *argv[])
 {
-	if (argc > 1 && strcmp(argv[1], "-c") == 0) {
-		/* clean useless headers */
-		do_clean_hdr = 1;
-		argv++;
-		argc--;
+	while (argc > 1 && argv[1][0] == '-') {
+		if (strcmp(argv[1], "-c") == 0) {
+			/* clean useless headers */
+			do_clean_hdr = 1;
+			argv++;
+			argc--;
+		} else if (strcmp(argv[1], "-w") == 0 && argc > 2) {
+			/* write the produced body length to this file */
+			clen_file = argv[2];
+			argv += 2;
+			argc -= 2;
+		} else {
+			break;
+		}
 	}
 
 	if (argc < 2)
