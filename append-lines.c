@@ -5,11 +5,17 @@
 
 #define MAX_LINE 8192
 
-void print_usage(const char *progname)
+void print_usage(const char *prog, int rc)
 {
-	fprintf(stderr, "Usage: %s [-L <content-length>] [-H <header_line>]* [-B <body_line>]*\n", progname);
-	fprintf(stderr, "Reads mbox from stdin, writes to stdout.\n");
-	exit(1);
+	fprintf(rc ? stderr : stdout,
+		"Usage: %s [-h] [-L <bytes>] [-H <header_line>]* [-B <body_line>]*\n"
+		"  -L <bytes>   re-emit Content-Length = <bytes> + the body bytes added below\n"
+		"  -H <header>  add a header line at the end of the header block\n"
+		"  -B <line>    prepend a line to the body\n"
+		"  -h           show this help\n"
+		"Reads an mbox from stdin, writes to stdout.\n",
+		prog);
+	exit(rc);
 }
 
 void print_args(int argc, char *argv[], const char *flag)
@@ -57,22 +63,25 @@ int main(int argc, char *argv[])
 	 */
 	for (arg = 1; arg < argc; arg++) {
 		if (argv[arg][0] != '-')
-			print_usage(argv[0]);
+			print_usage(argv[0], 1);
 		switch (argv[arg][1]) {
+		case 'h':
+			print_usage(argv[0], 0);
+			break;
 		case 'L':
 			if (arg + 1 >= argc)
-				print_usage(argv[0]);
+				print_usage(argv[0], 1);
 			base_clen = atol(argv[arg + 1]);
 			arg++;
 			break;
 		case 'H':
 		case 'B':
 			if (arg + 1 >= argc)
-				print_usage(argv[0]);
+				print_usage(argv[0], 1);
 			arg++;
 			break;
 		default:
-			print_usage(argv[0]);
+			print_usage(argv[0], 1);
 		}
 	}
 
