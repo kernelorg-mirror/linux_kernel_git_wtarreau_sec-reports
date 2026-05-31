@@ -560,8 +560,23 @@ void process_mbox(FILE *in)
 	}
 }
 
+void print_usage(const char *prog, int rc)
+{
+	fprintf(rc ? stderr : stdout,
+		"Usage: %s [-c] [-q] [-w FILE] [FILE]\n"
+		"  -c       drop noise headers (Received, X-*, DKIM/DMARC/ARC, ...)\n"
+		"  -q       quote the kept body with '> ' (e.g. for replies)\n"
+		"  -w FILE  write the produced body length, in bytes, to FILE\n"
+		"  -h       show this help\n"
+		"Reads an mbox from FILE or stdin, keeps text only, writes to stdout.\n",
+		prog);
+	exit(rc);
+}
+
 int main(int argc, char *argv[])
 {
+	const char *prog_name = argv[0];
+
 	while (argc > 1 && argv[1][0] == '-') {
 		if (strcmp(argv[1], "-c") == 0) {
 			/* clean useless headers */
@@ -578,6 +593,8 @@ int main(int argc, char *argv[])
 			clen_file = argv[2];
 			argv += 2;
 			argc -= 2;
+		} else if (strcmp(argv[1], "-h") == 0) {
+			print_usage(prog_name, 0);
 		} else {
 			break;
 		}
