@@ -48,21 +48,37 @@ int main(int argc, char *argv[])
 	int done = 0;		/* set once we've annotated the first message */
 	long base_clen = -1;	/* base Content-Length given with -L, or -1 */
 	long final_clen = 0;
-	int i;
+	int arg;
 
-	if (argc > 1 &&
-	    strcmp(argv[1], "-H") != 0 &&
-	    strcmp(argv[1], "-B") != 0 &&
-	    strcmp(argv[1], "-L") != 0)
-		print_usage(argv[0]);
+	/* Parse the options one at a time. -H and -B may repeat and are emitted
+	 * later, in order, by print_args(), so here we only validate them and
+	 * skip over their value. An unknown option, a missing value, or a
+	 * positional argument shows the usage.
+	 */
+	for (arg = 1; arg < argc; arg++) {
+		if (argv[arg][0] != '-')
+			print_usage(argv[0]);
+		switch (argv[arg][1]) {
+		case 'L':
+			if (arg + 1 >= argc)
+				print_usage(argv[0]);
+			base_clen = atol(argv[arg + 1]);
+			arg++;
+			break;
+		case 'H':
+		case 'B':
+			if (arg + 1 >= argc)
+				print_usage(argv[0]);
+			arg++;
+			break;
+		default:
+			print_usage(argv[0]);
+		}
+	}
 
 	/* -L gives the body length produced upstream (by textonly). The final
 	 * Content-Length is that base plus whatever the -B options add.
 	 */
-	for (i = 1; i < argc; i++) {
-		if (strcmp(argv[i], "-L") == 0 && i + 1 < argc)
-			base_clen = atol(argv[++i]);
-	}
 	if (base_clen >= 0)
 		final_clen = base_clen + added_body_bytes(argc, argv);
 
