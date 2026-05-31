@@ -7,23 +7,40 @@
 #define MAX_STACK 10
 
 int do_clean_hdr = 0;
+int do_quote = 0;	/* -q: prefix each body line with '> ' */
 char *clen_file = NULL;	/* if set, write the produced body length here */
 long tot_body_bytes = 0;	/* number of body bytes emitted for the current message */
+int at_bol = 1;	/* next body byte starts a new line (for quoting) */
 
-/* emit a string as body content, counting the bytes so that we can report the
- * resulting Content-Length.
+/* emit a single byte as body content, counting it for the Content-Length. With
+ * -q each body line is prefixed with '> ', or a bare '>' when the line is empty
+ * (so no trailing space is produced). The prefix bytes are counted too, so the
+ * reported length stays exact. A CR or LF at the start of a line marks an empty
+ * line; the prefix is emitted lazily on the first byte of each line.
  */
-void put_body_str(const char *s)
-{
-	fputs(s, stdout);
-	tot_body_bytes += strlen(s);
-}
-
-/* emit a single byte as body content, counting it for the Content-Length */
 void put_body_ch(int c)
 {
+	if (do_quote && at_bol) {
+		if (c == '\n' || c == '\r') {
+			putchar('>');
+			tot_body_bytes++;
+		} else {
+			fputs("> ", stdout);
+			tot_body_bytes += 2;
+		}
+		at_bol = 0;
+	}
 	putchar(c);
 	tot_body_bytes++;
+	if (c == '\n')
+		at_bol = 1;
+}
+
+/* emit a string as body content (see put_body_ch() for the accounting) */
+void put_body_str(const char *s)
+{
+	while (*s)
+		put_body_ch((unsigned char)*s++);
 }
 
 /* extract the boundary from <in> which must start at "boundary=" into <store>
@@ -429,6 +446,7 @@ void process_mbox(FILE *in)
 			found_and_dumped = 0;
 			clen = -1;
 			tot_body_bytes = 0;
+			at_bol = 1;
 
 			/* 1. HEADER: capture and drop content-length, drop lines,
 			 * and look for content-type. If multipart, we'll inspect
@@ -548,6 +566,11 @@ int main(int argc, char *argv[])
 		if (strcmp(argv[1], "-c") == 0) {
 			/* clean useless headers */
 			do_clean_hdr = 1;
+			argv++;
+			argc--;
+		} else if (strcmp(argv[1], "-q") == 0) {
+			/* quote the body with '> ' */
+			do_quote = 1;
 			argv++;
 			argc--;
 		} else if (strcmp(argv[1], "-w") == 0 && argc > 2) {
