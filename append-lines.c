@@ -4,16 +4,14 @@
 
 #define MAX_LINE 8192
 
-void 
-print_usage(const char *progname)
+void print_usage(const char *progname)
 {
 	fprintf(stderr, "Usage: %s [-H <header_line>]* [-B <body_line>]*\n", progname);
 	fprintf(stderr, "Reads mbox from stdin, writes to stdout.\n");
 	exit(1);
 }
 
-void 
-print_args(int argc, char *argv[], const char *flag)
+void print_args(int argc, char *argv[], const char *flag)
 {
 	int i;
 
@@ -25,8 +23,7 @@ print_args(int argc, char *argv[], const char *flag)
 	}
 }
 
-int 
-main(int argc, char *argv[])
+int main(int argc, char *argv[])
 {
 	char line[MAX_LINE];
 	int in_headers = 0;
